@@ -1,0 +1,514 @@
+\documentclass[12pt]{article}
+\usepackage{natbib}
+\parindent 5mm
+\textwidth=6.5in
+\textheight=8.5in
+\parskip= 3mm
+
+\topmargin=-0.5cm
+
+\oddsidemargin=-0.14in
+%\evensidemargin=-0.2in
+\usepackage{amsmath,color}
+%\usepackage{graphicx}
+%\usepackage{booktabs}
+
+
+%\def\bbeta{\mbox{\boldmath $\beta$}}
+%\def\balpha{\mbox{\boldmath $\alpha$}}
+%\def\E{\mbox{E}}
+%\def\var{\mbox{var}}
+%\def\Cov{\mbox{cov}}
+\def\diag{\mbox{diag}}
+%\def\tr{\mbox{tr}}
+%
+%\RequirePackage{amsmath,amssymb,graphicx,lscape,txfonts}
+%%\numberwithin{equation}{section}
+%%\documentclass[dvips,aos]{imsart}
+
+target:  {\em Statistics and Computing}
+\begin{document}
+
+\baselineskip 8mm
+\begin{center}
+{\Large \bf Inverting  a Certain type of Covariance Matrics }
+
+{\bf You-Gan Wang}
+
+{\em School of Mathematics and Physics,  The University of Queensland,  Australia\\
+  email: {\emph you-gan.wang@uq.edu.au}}
+
+%\setcounter{page}{1}
+%\thispagestyle{empty}
+\end{center}
+
+\noindent {\sc Abstract.}  \ \
+Inverting covariance matrices is ubiquitous in statistical modelling and analysis, and its increasing importance and associated challenges are more imminent nowadays due to the emergence of large data sets. The commonly used covariance matrices from the autoregressive and moving average models, together with measurement errors or nugget effects, are considered. The exact inverse of these extended covariance matrices is given in closed form, enabling easy and fast computing. In particular, the continuous-time Markov chain model with irregular observation times and heterogeneous nugget effects, such as those found in a Poisson regression, is considered. An application to a hydrological study is provided as an illustrative example.
+
+\noindent
+ {\sc Key words:} Covariance modelling; Large dimension; Longitudinal data; Random effects; Repeated measures; Time series. \\
+
+
+\section{Introduction}
+
+% =========================
+% Preamble additions (recommended)
+% =========================
+% Add these in the preamble (after amsmath):
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+% =========================
+% Replacement: \section{Introduction}
+% =========================
+\section{Introduction}
+
+Fast linear-algebra primitives for structured covariance matrices are central to modern
+statistical computing.  Inference for Gaussian and quasi-Gaussian models typically requires
+repeated evaluation of (i) linear solves $\Sigma^{-1}b$, (ii) quadratic forms $b^\top\Sigma^{-1}b$,
+and (iii) (restricted) log-likelihood terms involving $\log|\Sigma|$.
+When $\Sigma$ is unstructured, these operations are usually performed by dense Cholesky
+factorization with $O(n^3)$ arithmetic and $O(n^2)$ memory, which becomes prohibitive when
+$n$ is in the thousands or larger.  This motivates explicit formulae and recursions that
+exploit dependence structure to achieve substantial computational savings and improved
+numerical stability.
+
+Structured covariances arise broadly across statistics, data science and scientific computing.
+In time-series and longitudinal analysis, autoregressive and moving-average dependence is
+routinely used to represent temporal correlation \citep{box1976time, pourahmadi1999joint, wu2003nonparametric}.
+In mixed and random-effects models, block and compound-symmetry forms are used to capture
+within- and between-subject variability \citep{laird1982random, verbeke2000linear}.
+In machine learning and spatial-temporal modelling, covariance inversion is a bottleneck in
+Gaussian process regression and kernel methods \citep{rasmussen2006gaussian, wilson2015kernel, gardner2018gpytorch}.
+A common practical complication is the presence of \emph{nugget effects} (independent
+measurement errors or microscale variability), which add a diagonal component to the
+dependence covariance and can destroy the simple inverses available in the nugget-free case.
+
+This paper develops explicit inverses and fast recursions for several covariance families
+that are widely used but computationally challenging once nugget effects and irregular
+sampling are present.  We focus on three classes: (i) MA(1) correlation matrices,
+(ii) AR(1) covariance matrices with additive nugget variance, and (iii) continuous-time
+first-order Markov (OU-type) correlation with irregular sampling times and heterogeneous
+nugget variances.  The results provide direct, implementation-ready procedures for fast
+solves and (when needed) likelihood evaluation.
+
+\paragraph{Contributions.}
+Our main contributions are:
+\begin{itemize}
+  \item \textbf{MA(1) inverse in closed form.}  We provide an explicit expression for
+  $R_{\mathrm{MA}}(\rho)^{-1}$ that enables $O(n)$ evaluation of its nonzero bands and
+  $O(n)$ solves for MA(1)-type systems.
+
+  \item \textbf{AR(1) with nugget effects.}  For $\Sigma = \sigma_T^2 R_{\mathrm{AR}}(\rho)+\sigma_\varepsilon^2 I$,
+  we derive a closed-form inverse (and associated recursions), enabling fast GLS-type
+  computations without generic dense factorization.
+
+  \item \textbf{Irregular-time Markov correlation with heterogeneous nugget.}
+  For $\Sigma = R_{\mathrm{CM}}(\rho)+H$ with $H=\mathrm{diag}(\sigma_1^2,\ldots,\sigma_n^2)$ and
+  $[R_{\mathrm{CM}}(\rho)]_{ij}=\rho^{|t_j^\delta-t_i^\delta|}$, we show that
+  $\Sigma^{-1}$ can be computed via a diagonal--tridiagonal reduction and recurrences.
+  This yields $O(n)$ arithmetic for solves $\Sigma^{-1}b$ and $O(n^2)$ arithmetic to form the full inverse
+  (e.g., by repeated solves), which is practical for large $n$.
+
+  \item \textbf{Statistical-computing primitives.}  The same recursions deliver quadratic forms
+  $b^\top\Sigma^{-1}b$ and, via a tridiagonal determinant recurrence, $\log|\Sigma|$ in $O(n)$ time
+  for the Markov+nugget class, facilitating fast likelihood/REML calculations.
+
+  \item \textbf{Implementation-ready algorithms.}  We summarize the key steps as explicit algorithms
+  (Algorithm~\ref{alg:markov-nugget}), suitable for direct implementation in R/Python/C++.
+\end{itemize}
+
+The remainder of the paper is organized as follows.  Section~2 presents the covariance
+classes and derives the corresponding inverses/recursions.  Section~3 illustrates the
+computational benefits in an application, and Section~4 concludes with discussion and
+extensions.
+
+% =========================
+% Algorithm 1 (LaTeX)
+% Put this in the Markov/irregular subsection (or wherever appropriate)
+% =========================
+\begin{algorithm}[t]
+\caption{Fast solve (and log-determinant) for irregular-time Markov correlation with heterogeneous nugget}
+\label{alg:markov-nugget}
+\begin{algorithmic}[1]
+\Require Ordered sampling times $t_1<\cdots<t_n$, parameters $\rho\in(-1,1)$ and $\delta>0$;
+nugget variances $\sigma_1^2,\ldots,\sigma_n^2>0$; right-hand side $b\in\mathbb{R}^n$.
+\Ensure $x=\Sigma^{-1}b$ for $\Sigma=R_{\mathrm{CM}}(\rho)+H$, where $H=\mathrm{diag}(\sigma_1^2,\ldots,\sigma_n^2)$;
+optionally $\log|\Sigma|$.
+
+\State Compute intervals $d_k \gets t_k^\delta - t_{k-1}^\delta$ for $k=2,\ldots,n$ and set $\alpha_k \gets \rho^{d_k}$.
+\State Form the tridiagonal precision matrix $Q \gets R_{\mathrm{CM}}(\rho)^{-1}$ with entries
+\[
+Q_{1,1}=\frac{1}{1-\alpha_2^2},\quad
+Q_{n,n}=\frac{1}{1-\alpha_n^2},\quad
+Q_{k,k}=\frac{1}{1-\alpha_k^2}+\frac{1}{1-\alpha_{k+1}^2}-1\ (k=2,\ldots,n-1),
+\]
+\[
+Q_{k-1,k}=Q_{k,k-1}=-\frac{\alpha_k}{1-\alpha_k^2}\ (k=2,\ldots,n),
+\quad\text{and other entries }0.
+\]
+\State Set $\Delta \gets H^{-1}=\mathrm{diag}(\sigma_1^{-2},\ldots,\sigma_n^{-2})$ and $F \gets Q+\Delta$ (tridiagonal).
+\State Compute $u \gets \Delta b$ (elementwise $u_i=b_i/\sigma_i^2$).
+\State Solve the tridiagonal system $F w = u$ (e.g., Thomas algorithm) to obtain $w=F^{-1}u$.
+\State Output $x \gets u - \Delta w$ (i.e., $x_i = u_i - w_i/\sigma_i^2$), which equals $\Sigma^{-1}b$.
+
+\Statex \textbf{Optional: compute $\log|\Sigma|$ in $O(n)$ via a tridiagonal determinant recurrence.}
+\State Form the (generally nonsymmetric) tridiagonal matrix $T \gets I + QH$:
+$T_{i,i}=1+Q_{i,i}\sigma_i^2$, $T_{i,i+1}=Q_{i,i+1}\sigma_{i+1}^2$, $T_{i,i-1}=Q_{i,i-1}\sigma_{i-1}^2$.
+\State Compute the determinant recurrence:
+$D_1 \gets T_{1,1}$; $D_2 \gets T_{2,2}D_1 - T_{2,1}T_{1,2}$; and for $k=3,\ldots,n$,
+\[
+D_k \gets T_{k,k}D_{k-1} - T_{k,k-1}T_{k-1,k}D_{k-2}.
+\]
+\State Set $\log|\Sigma| \gets \sum_{i=1}^n \log(\sigma_i^2) + \log|D_n|$.
+\end{algorithmic}
+\end{algorithm}
+
+
+\section{Covariance Models}
+
+ \subsection{MA1 correlation matrices}
+
+\noindent
+If $R_{MA}(\rho)$ is a MA1 correlation matrix with the constant correlation parameter $\rho$, i.e., $r_{ij} =\rho$ if $|i-j|=1$, =0 $|i-j| > 1$, we have
+$$
+|R_{MA}(\rho)|= \prod_{k=1}^n \left\{1+ 2\rho \cos(\frac{k\pi}{n+1})\right\}.
+$$
+The eigenvalues are $1+2\rho \cos\{k/(n+1) \pi\}$ for $k=1, 2, ... , n$, and the maximum $\rho$ allowed for $R_{MA}$ is $1/(2\cos\{\pi/(n+1)\}$, for $R_{MA}$ to be a positive definite. Except for the values $\rho = 1/[2\cos\{k/(n+1) \pi\}]$ ($k=1, 2, ..., n$),  $R_{MA}(\rho)$ is invertible for all other $\rho$ values. When $|\rho| < 1/2$,  we have the following expression for the $(i,j)$-th element ($i \leq j$)  in $R^{-1}_{MA}$ (see Whittle, 1963~\citep{whittle1954appendix}; Shaman, 1969~\citep{shaman1969inverse}),
+\begin{equation}
+     b_{ij}  = \frac{(1-b^{2n-2j+2})(b^{j+i+1}-b^{j-i+1})}{\rho(1-b^2)(1-b^{2n+2})}, \label{eq:Graybill}
+     \end{equation}
+ where $b = -(\sqrt{1-4\rho^2}+1)/(2\rho)$, i.e., $\rho= - b/(1+b^2)$.
+
+
+ %One of the main advantages of having the exact expressions of inverse matrices available is that
+% we can obtain the numerical values for the inverse matrices easily regardless the dimension is large or small.
+
+Note that in practical data analysis, $|\rho|$ or its estimate may become greater than 0.5, and the above expression of $b_{ij}$ becomes invalid. For example,  in longitudinal data analysis, $n=4$, $\rho=0.6$, $R_{MA}(\rho)$ is a well-behaved correlation matrix. The special case of $\rho = -0.5$, {\it i.e.}, $b=0$, is associated with the one-dimensional Poisson equation with Dirichlet boundary conditions in physics~\citep{dorr1970direct}. The inverse exists as long as $R_{MA}(\rho)$ is nonsingular. Such general nonsingular matrices can arise in evaluating other types of patterned matrices. Thus, it is desirable to have an expression that works for all $\rho$ values whenever $R_{MA}(\rho)$ is nonsingular regardless it is positive definite or not.
+
+As we will see, $R^{-1}_{MA}(\rho)$ plays a critical role in deriving exact inverse expressions for other important covariance matrices.  We now present the results for inverse $R_{MA}(\rho)$ for $|\rho| \geq  1/2$.  Let $\theta$ be the angle so that $\cos(\theta) = -1/(2\rho)$ and $\sin(\theta) = -\sqrt{4\rho^2-1} /(2\rho)$, i.e., $\theta=\arctan (\sqrt{4\rho^2-1})$, if $\rho <0$ and $\theta=\arctan (\sqrt{4\rho^2-1}) + \pi$ if $\rho > 0$.
+
+\noindent
+{\bf Proposition 1.} Suppose the matrix $R_{MA}(\rho)$ is nonsingular. The $(i,j)$-th element, $i \leq j$, in $R^{-1}_{MA}(\rho)$ is then given by
+\begin{equation}
+b_{ij} =  \frac{-\sin(n-j+1)\theta\sin (i\theta)}{\rho \sin\theta\sin(n+1)\theta}. \label{new.bij}
+\end{equation}
+In the case $\rho=0.5$ or $-0.5$, we have the limiting values as $\theta \rightarrow 0$, making
+\begin{equation}
+   b_{ij} =  (-1)^{i-j}\frac{(n-j+1)i}{\rho (n+1)} \ \ \mbox{and} \ \
+   b_{ij} =  - \frac{(n-j+1)i}{\rho (n+1)}, \  \ \mbox{respectively}.
+\end{equation}
+
+The derivation involves tedious algebra. Multiplying the proposed inverse matrix by  $R_{MA}(\rho)$, which clearly results in an identity matrix, proves the main results. In the limiting case of $\theta=0$ and $\pi$, the $b_{ij}$ expression can be obtained using a Taylor series expansion of $\sin(x) \approx x$ and $\sin(\pi+x) \approx -x$.
+
+Expression (\ref{new.bij}) is easy to compute. In fact, (\ref{new.bij}) is  also valid when $|\rho|< 0.5$, but $\theta$ is a complex number, and both $\sin(\theta)$ and $\tan(\theta)$ contain only the image components without a real component, $-\sqrt{1-4\rho^2} /(2\rho)$ and $\sqrt{1-4\rho^2}$.  Elementary analysis using complex number theory shows that  $b_{ij}$ is a real number and coincides with the expression given by (\ref{eq:Graybill}).
+%
+%The following three matrices are the first $3\times 3$ principal leading diagonal matrices from
+%the inverse matrices $R^{-1}_{MA}(\rho)$ for, respectively. ...
+
+Note that the MA1 model with nugget effects is still a moving average model that is reparameterised  because $\Sigma = \sigma_T^2R_{MA}(\rho)+ \sigma_{\epsilon}^2 I = (\sigma_T^2+ \sigma_{\epsilon}^2) R_{MA}(\rho^*)$, where $\rho^* =\sigma_T^2 \rho/ (\sigma_T^2+\sigma_{\epsilon}^2)$.
+
+%   ## |rho| > 0.5 0r < 0.5
+%   Invma2<-function(rho,n)
+%   {
+%    iRma <- diag(n)
+%    xx<-(1-4*rho^2)
+%    xx<-ifelse(xx<0, sqrt(-xx),sqrt(xx)*1i)
+%    theta <- atan(xx)+pi*(1+sign(rho))/2
+%   # print(theta)
+%    ## for rho^2 >1/4
+%    ## theta <- atan(sqrt(4*rho^2-1))+pi*(1+sign(rho))/2
+%     j<-col(iRma)
+%    i<-row(iRma)
+%    maxij<-(abs(i-j)+(i+j))/2
+%    minij<-(-abs(i-j)+(i+j))/2
+%   x1<- -sin((n-maxij+1)*theta)*sin(minij*theta)
+%   x2<-rho*(sin(theta))*sin((n+1)*theta)
+%   x1/x2
+%   }
+
+ \subsection{AR1 with nugget effects}
+
+\noindent
+We now consider the errors as an AR1 process with nugget effects. The covariance of interest is $\Sigma = \sigma_1^2 R_{AR}(\rho) + \sigma^2 I$, where $I$ is the $n \times n$ unit matrix. Without loss of generality, we assume $\sigma_1^2=1$. The expression of $R^{-1}_{AR}$ is well known and takes a tridiagonal form,
+$$
+ R^{-1}_{AR}(\rho)=\frac{1}{1-\rho^2}\left(
+ \begin{matrix}
+     1    & -\rho   &      0 &  0  & \cdots &  0  &  0 \\
+   -\rho   & 1+\rho^2& -\rho &  0  & \cdots & 0  &  0 \\
+      \vdots & \vdots & \vdots  &  \vdots   & \vdots & \vdots   & \vdots \\
+   0 & 0 & 0   &  \cdots   & \cdots   & 1+\rho^2 & -\rho \\
+   0 & 0 & 0   &     0    & \cdots & -\rho  & 1  \\
+  \end{matrix}
+  \right).
+$$
+
+Let $u=(1, 0,...,0)$ and $v=(0,...,0,1)$, both are of dimension $n\times 1$. We now present the exact inverse of $\Sigma$.
+
+\noindent
+ {\bf Proposition  2.}  Suppose $\Sigma =  R_{AR}(\rho) + \sigma^2 I$, where $\sigma^2 > 0$; then,
+$\Sigma^{-1}=\sigma^{-2} (I - \bar{W} \sigma^{-2})$, where
+\begin{eqnarray*}
+\bar{W}  =  b^{-2}\bar{P} \left\{ I + \tau^2 \frac{vv^{\rm T} \bar{P}}
+        {1 - \tau^2 v^{\rm T} \bar{P} v}\right\},
+\end{eqnarray*}
+$$
+\bar{P}  =  R^{-1}_{MA}(a) \left\{ I + \tau^2 \frac{uu^{\rm T} R^{-1}_{MA}(a)}
+        {1 - \rho^2 u^{\rm T} R^{-1}_{MA}(a)u}\right\},
+$$
+and  $a=-\rho/(1+\rho^2+\xi^2)$, $b^2=(1+\rho^2+\xi^2)/(1-\rho^2)$, $\tau=-\rho/(1+\rho^2+\xi^2)$ and
+$\xi^2=(1-\rho^2)/\sigma^2$.
+
+Because $R^{-1}_{MA}(a)$ has explicit expression for every entry given by (\ref{new.bij}), Proposition  2 provides closed form for calculating  $\Sigma^{-1}$. The proof is given in the appendix.
+
+In fact, for any covariance matrix $S$, if its inverse expression is available, we can also obtain an exact expression for $\Sigma = S+\sigma^2 R_{CS}(\rho)$ as,
+$$
+\Sigma^{-1}=  S^{-1} - \rho_2\alpha^2\frac{S^{-1} J S^{-1}}{1+\rho_2\alpha^2 {\bf 1}^{\rm T}
+     S^{-1} {\bf 1}}.
+$$
+This is because we can express $\Sigma$ as the sum of $R_{AR}(\rho_1) + \{\sigma^2 +\alpha^2(1-\rho_2)\}I$ and $\rho_2\alpha^2 {\bf 1} {\bf 1}^{\rm T}$ and then apply the Lemma in the Appendix.
+
+ \noindent
+{\it Corollary}.
+  Suppose $\Sigma =  R_{AR}(\rho_1) + \alpha^2 R_{CS}(\rho_2) + \sigma^2 I$, where $\sigma^2 > 0$, which gives
+$$
+  \Sigma^{-1}=  Q - \rho_2\alpha^2\frac{Q J Q}{1+\rho_2\alpha^2 {\bf 1}^{\rm T}Q {\bf 1}},
+$$
+where $Q$ is the inverse matrix of $R_{AR}(\rho_1) + \{\sigma^2 +(1-\rho_2)\alpha^2\}I$ that can be obtained from Proposition  2.
+
+For example, when $n=1000$ and $\Sigma=R_{AR}(0.8)+0.9^2 R_{CS}(0.5) + 1.1^2I$, the Corollary gives $\Sigma^{-1}$ as
+$$
+\left(
+\begin{array}{rrrrr}
+   0.439 & -0.102 & -0.058  & & ...  \\
+ -0.102  & 0.463  & -0.089  & & ... \\
+ -0.058  & -0.089  & 0.471  & & ... \\
+... \\
+ ...   &     &  &      0.463   &  -0.102\\
+   ... &     &  &    -0.102   & 0.439 \\
+\end{array}
+\right).
+$$
+
+ \subsection{Markov covariance with irregular sampling times}
+
+\noindent When the sampling times are regular, the Markovian model results in the correlation matrix $R_{AR}(\rho)$. Denote the determinant $|R_{MA}(\rho)|$ as  $D_n$, which gives $D_1=1, D_2=1-\rho^2$ and in general,  $D_k = D_{k-1} - \rho^2 D_{k-2}$. To obtain the inverse $R_{MA}$, we consider the cofactors, $c_{ij}$. The $(i,i$)-th cofactor is $c_{i i} = D_{i-1} D_{n-i}$.  Simple algebra shows $c_{11} = D_{n-1}, c_{12}=-\rho D_{n-2}, c_{13} =\rho^2 D_{n-3}$,  and, in general,  $c_{i,j} =(-\rho)^{|j-i|} D_{i-1}D_{n-j}$. We can thus  express the elements in $R^{-1}_{MA}(\rho)$ as $c_{ij}/D_n$. All that is required is to obtain the sequence of the determinant values for $n=1$ to $n$ (Hu and O'Connell 1996).
+
+Suppose the sampling times are irregular, i.e., not equally spaced. Denote the sampling times as $t_k$, $k=1,2,...,n$. The continuous time, first order Markovian model has the induced correlation matrix $R_{CM}(\rho)=(\rho^{|t_j-t_i|})$.  We now consider the following general Markov correlation model with nugget effects as
+$$
+\Sigma = \left(
+ \begin{matrix}
+     1        & \rho^{t_2^\delta-t_1^\delta}   & \rho^{t_3^\delta-t_1^\delta}    & \cdots & \rho^{t_{n-1}^\delta-t_1^\delta}& \rho^{t_n^\delta-t_1^\delta} \\
+   \rho^{t_2^\delta-t_1^\delta}       & 1      & \rho^{t_3^\delta-t_2^\delta}      & \cdots &
+   \rho^{t_{n-1}^\delta-t_2^\delta} &\rho^{t_n^\delta-t_2^\delta}  \\
+   \cdots \\
+   \rho^{t_{n-1}^\delta-t_1^\delta} & \rho^{t_{n-1}^\delta-t_2^\delta}     &  \rho^{t_{n-1}^\delta-t_3^\delta}   & \cdots & 1 &  \rho^{t_{n}^\delta-t_{n-1}^\delta} \\
+   \rho^{t_{n}^\delta- t_1^\delta} & \rho^{t_{n}^\delta-t_2^\delta} & \rho^{t_{n}^\delta-t_2^\delta}   & \cdots & \rho^{t_{n}^\delta-t_{n-1}^\delta} &  1  \\
+  \end{matrix}
+  \right)
++
+  \left(
+ \begin{matrix}
+     \sigma_1^2    & 0   &      0 &  0  & \cdots &  0  &  0 \\
+   0  &  \sigma_2^2 & 0 &  0  & \cdots & 0  &  0 \\
+      \vdots & \vdots & \vdots  &  \vdots   & \vdots & \vdots   & \vdots \\
+   0 & 0 & 0   &  \cdots   & \cdots   &  \sigma_{n-1}^2 & 0 \\
+   0 & 0 & 0   &     0    & \cdots & 0 &  \sigma_n^2  \\
+  \end{matrix}
+  \right).
+$$
+
+The power transformation with parameter $\delta$ is to account for nonstationarity (see N\'u\~nez Anton and Woodworth, 1994). Wang and Carey (2004) also obtained the Cholesky decomposition for $R^{-1} = \Gamma^{\rm T}\Gamma $, where $\Gamma$ is a lower-triangle matrix, which makes $\Gamma \epsilon_i$ standardised, and uncorrelated residuals that are used to construct unbiased estimating equations.
+
+Suppose the error process has a covariance structure taking the following form, $\Sigma = A_1^{-1/2}R_{CM}(\rho_1)A_1^{-1/2} + A_0$, in which $A_1$ is a diagonal matrix for the variances, and $A_0$ is a diagonal matrix representing the measurement errors. Heterogeneity often occurs in the generalised linear model framework, e.g., Poisson regression. We can write $\Sigma^{-1}$ as $A_1^{-1/2} \{R_{CM}(\rho_1) + D\}^{-1} A_1^{-1/2}$, where $D=A_0A_1$ is a diagonal matrix. Therefore, without loss of generality,  we will only need to consider how to invert the matrix $\Sigma = R_{CM}(\rho_1)+ H$, in which $H=\diag (\sigma_1^2, \sigma^2_2, ..., \sigma_n^2)$. In the case of all $\sigma_k=0$, we have  a closed form for the inverse matrix,
+ $\Sigma^{-1}$. We are now interested in the general case with nugget effects.
+
+Denote the time interval $t_{k}^\delta -t_{k-1}^\delta$ as $d_k$. The special case of constant $d_k$ corresponds to the AR1 model, which we discussed in \S 3. We now consider the inverse of $\Sigma =  R_{CM}(\rho) + H$, where $H=\diag (\sigma_1^2, \sigma^2_2, ..., \sigma_n^2)$.  The method of tearing leads to, $\Sigma^{-1}= \Delta (I - F^{-1}\Delta)$, where $\Delta$ is $\diag(1/\sigma_1^2, 1/\sigma^2_2, ..., 1/\sigma_n^2)$, $F = R^{-1}_{CM}(\rho) + \Delta$, and $F^{-1}$ can be obtained via recurrence equations.
+
+
+We first write $\Sigma^{-1}$ as $\Delta(I - F^{-1}\Delta)$, where $F = R^{-1}_{CM}(\rho) + \Delta$, $\Delta$ is $\diag(1/\sigma_1^2, 1/\sigma^2_2, ..., 1/\sigma_n^2)$ and $R^{-1}_{CM}(\rho)$ is (see N\'u\~nez-Ant\'on and Woodworth 1994~\citep{nunez1994analysis})
+$$
+ R^{-1}_{CM} = \left(
+ \begin{matrix}
+   \frac{1}{1-\rho^{2d_2}}          &\frac{-\rho^{d_2}}{1-\rho^{2d_2}}              & 0 & 0 & ... &0 & 0\\
+   \frac{-\rho^{d_2}}{1-\rho^{2d_2}} &\frac{1}{1-\rho^{2d_2}} + \frac{1}{1-\rho^{2d_3}} -1 &
+    \frac{-\rho^{d_3}}{1-\rho^{2d_3}} & 0  & ... & 0 & 0\\
+   0 & \frac{-\rho^{d_3}}{1-\rho^{2d_3}} &\frac{1}{1-\rho^{2d_3}} + \frac{1}{1-\rho^{2d_4}} -1 &
+    \frac{-\rho^{d_4}}{1-\rho^{2d_4}}  & ... & 0 & 0\\
+   ...\\
+  0 & 0 & 0 & 0 & ... & \frac{1}{1-\rho^{2d_{n-1}}} + \frac{1}{1-\rho^{2d_n}} -1 &  \frac{-\rho^{d_n}}{1-\rho^{2d_n}} \\
+  0 & 0 & 0 & 0 & ... & \frac{-\rho^{d_n}}{1-\rho^{2d_n}} &  \frac{1}{1-\rho^{2d_n}} \\
+  \end{matrix}
+  \right).
+$$
+
+To obtain $F^{-1}$,  let $ b_k = - \rho^{d_k}/(1-\rho^{2d_k})$ and define
+ \begin{eqnarray*}
+ a_1 & = &1/(1-\rho^{2d_2})+ 1/\sigma_1^2 \\
+ a_2& = & 1/(1-\rho^{2d_2}+ 1/(1-\rho^{2d_3})-1 + 1/\sigma_2^2\\
+ ...\\
+ a_k& = & 1/(1-\rho^{2d_k})+ 1/(1-\rho^{2d_{k+1}})-1+1/\sigma_k^2\\
+...\\
+ a_n & = & 1/(1-\rho^{2d_n})+ 1/\sigma_2^2.
+ \end{eqnarray*}
+
+We can now  write the symmetric tridiagonal matrix $F$ as,
+$$
+ F =\left(\begin{matrix}
+    a_1  & b_2  & 0   & ... &  0 & 0\\
+    b_2   & a_2 & b_3 & ... & 0 & 0 \\
+     0   & b_3   & a_3 & ... & 0 & 0 \\
+     ... \\
+     0  & 0 & 0 & ... & a_{n-1} & b_n\\
+     0  & 0 & 0 & ... & b_n  & a_n\\
+     \end{matrix}  \right).
+$$
+
+We write $F$ as $\tilde{A}\tilde{R}\tilde{A}$, where $\tilde{A}=\diag(\sqrt{a_k})$,  $\tilde{R}$ takes the same pattern as $F$ with the  unit on the diagonal and $q_{k+1} =b_{k+1} /\sqrt{a_ka_{k+1}}$ on the sub-diagonal and 0 elsewhere.
+
+Let $D_k$ be  the determinant of the principal leading matrix of order $k$, making $D_1=1, D_2= 1 - q_2^2$ and  $D_k = D_{k-1} - q_k^2 D_{k-2}$ or $d_k =1 -q_k^2/d_{k-1}$, where $d_k$ is the ratio $D_k/D_{k-1}$ (define $d_1=1$). To obtain $\tilde{R}^{-1}$,  let $\bar{D}_k$ be the determinant of $\tilde{R}$ after removing the first $(k-1)$ row and column, and define $x_{k} =\bar{D}_k/\bar{D}_{k-1}$. Then, $\bar{D}_n=1$ and $ \bar{D}_{n-1}=1-q_n^2$, leading to $x_n=1/(1-q_n^2)$ and $x_k= 1/(1 - x_{k+1} q_k^2)$ for $k=n-1, n-2,..., 1$.
+
+Denote the elements in $\tilde{R}^{-1}$ as  $(r_{ij})$. Using the cofactors, we obtain
+$$
+   r_{11}  =  \frac{\bar{D}_1}{D_n} = \frac{1}{1-q_2^2 x_2} \ \ \mbox{and}  \ \
+   r_{n\ n}  = \frac{D_{n-1}}{D_n} =  \frac{1}{1-q_n^2/d_{n-1}}.
+$$
+Let $x_{n+1}=1$ for $ j=2,...,n$ and
+$$
+   r_{jj}  =  \frac{1}{ x_{j+1}^{-1} -q_j^2 /d_{j-1}}.
+$$
+
+Once we have obtained the diagonal elements, we calculate $r_{i n}$ for $i=n-1,n-2,...,1$ and then $r_{i n-1}$  for $i= n-2, n-3, ..., 1$ and so on. The recurrence equation is ($i=j-1,j-2,..., 1)$
+ $$
+    r_{ij}  =  - q_{i+1}/ d_i r_{i+1 j}.
+ $$
+
+This gives the following Proposition.
+
+\noindent
+ {\bf Proposition 3}.  Suppose $\Sigma =  R_{CM}(\rho) + H$, where $H=\diag (\sigma_1^2, \sigma^2_2, ..., \sigma_n^2)$.  We have $\Sigma^{-1}= \Delta - B W B$, where both $\Delta$  and $B$ are diagonal, $\Delta = \diag(1/\sigma_1^2, 1/\sigma^2_2, ..., 1/\sigma_n^2)$, $B=\diag(1/(\sqrt{a_k}\sigma_k))$, and $W =\tilde{R}^{-1}$ can be obtained via recurrence equations.
+
+The arithmetic complexity is $O(n^2)$. If the time variance matrix associated with $R_{AR}$ is heterogeneous, the above result is still applicable. If the covariance of interest takes the form $\Sigma = G R_{AR}G + H$, where $G$ is diagonal representing the standard deviation components in time and $H$ again is the diagonal matrix for the nugget effect variance,  we can rewrite $\Sigma$ as $G \Sigma^* G $, where $\Sigma^* = R_{AR} + HG^{-2}$.  Thus,  we obtain $\Sigma^{-1}$ as $ G^{-1} (\Sigma^*)^{-1} G^{-1}$, in which $(\Sigma^*)^{-1}$ can then be obtained by using Proposition  3  because $HG^{-2}$ is diagonal.
+
+
+For example, when $n=5000$, $\rho=0.8$ and $\Sigma= R_{CM}(\rho) + \diag(\sigma_i^2)$, the $(i,j)$-th elements in $R_{CM}(\rho)$ are  $\rho^{|\sqrt{j}-\sqrt{i}|}$ and $\sigma_i^2=(1+i/n)^2$. The lag1 correlations between consecutive observations become increasingly larger over time in this case. This non-stationarity is caused by the square root transformation.  Using Proposition 3 and the algorithm above, we easily  obtain the corresponding inverse $5000 \times 5000$ matrix,
+ $$
+%\tilde{R} = \left(\begin{array}{rrrrr}
+%  1.909 &  1.626 &  1.182 &  & ...  \\
+%  1.626&  2.909 &  2.114  &  & ...   \\
+%  1.182&  2.114 &  3.072  &  & ...   \\
+%   ... \\
+%    ... &  &  &  64.703 & 45.690 \\
+%    ... &  &  & 45.690 & 33.264 \\
+%   \end{array}
+%   \right) \ \mbox{and} \ \
+ \Sigma^{-1} =  \left(
+\begin{array}{rrrrr}
+        0.724 & -0.168& -0.111  &  & ...  \\
+       -0.168 &  0.784 & -0.142 &  & ...  \\
+       -0.111 & -0.142 &  0.812 &  & ...  \\
+        ... \\
+     ... &     &  & 0.243 & -0.006 \\
+     ... &     &  &  -0.006 &  0.243 \\
+\end{array}
+\right).
+$$
+All the R codes for calculating the inverse matrices in \S 2--4 are available upon request from the author.
+
+ \section{An Example}
+
+\noindent  In this application, we will show how the additional error term of the nugget effect improves the statistical model. Calculation of the inverse of covariances arising from the continuous time Markovian model and nugget effects is not a problem any more, regardless of how large the dimension (the length of the time series), due to the explicit expression.
+
+The export of sediments from coastal catchments can have detrimental impacts on estuaries and near-shore reef ecosystems, including the Great Barrier Reef (listed as World Heritage). Catchment management approaches aimed at reducing sediment loads require monitoring to evaluate their effectiveness in reducing loads over time.  Therefore, leading to a demand for accurate estimates of total sediment loads. In  Australia, for example,  there are increasing concerns over the quality of water in the Great Barrier Reef Catchment Area.  A key step in estimating annual load and its uncertainty (standard error)  is establishing the relationship (such as flow, seasonality) and concentration data collected at irregular times over years, so that concentration can be predicted on daily or even hourly intervals for total annual load calculation.
+
+In this section, we will use the water quality data collected from the end of the catchment on the Burdekin River (the largest of the catchments flowing to the Reef Lagoon).  590 Samples collected for the period of 15 years (1994--2008) will be used for illustrative analysis.
+
+Suppose $y_i$ is the pollutant concentration (on natural log-scale) collected at times $t_i$ together with the predictors $X_i$. For illustration of the covariance computation, let us  consider the following model,
+  $$
+     y_{i} =  X_i \beta  +  \epsilon_i + \zeta_i,
+ $$
+where $\epsilon_i$ represents the auto-regressive error at time $t_i$ and $\zeta_i$ are the independent nugget effects or measurement errors.  We use an improved model of Cohn {\it et al.} (1992)~\citep{cohn1992validity} and include nine predictors: intercept, time trend, $\log$(flow), $\log^2$(flow), annual seasonal patterns ($sin(2\pi t_i)$ and $\cos(2\pi t_i)$), $\log$(ADF) and $\log^2$(ADF). Here, the ADF is an average discounted flow (ADF) representing the historic flow pattern using a discount factor of 0.95.  % (Wang {\em et al.}, 2011).
+
+The auto-regressive error $\epsilon_t$ is to account for the temporal correlations~\citep{verbeke2000linear}.  Note that due to irregular sampling times, which is often the case in practice, $t_1, t_2. ..., t_n$ are not equally spaced.
+The underlying covariance matrix of $(y_i)$, is of dimension $n\times n$
+$$
+\Sigma = \sigma_1^2 \left(
+ \begin{matrix}
+     1        & \rho^{t_2 -t_1 }   & \rho^{t_3 -t_1 }    & \cdots & \rho^{t_{n-1} -t_1 }& \rho^{t_n -t_1 } \\
+   \rho^{t_2 -t_1 }       & 1      & \rho^{t_3 -t_2 }      & \cdots &
+   \rho^{t_{n-1} -t_2 } &\rho^{t_n -t_2 }  \\
+   \cdots \\
+   \rho^{t_{n-1} -t_1 } & \rho^{t_{n-1} -t_2 }     &  \rho^{t_{n-1} -t_3 }   & \cdots & 1 &  \rho^{t_{n} -t_{n-1} } \\
+   \rho^{t_{n} - t_1 } & \rho^{t_{n} -t_2 } & \rho^{t_{n} -t_2 }   & \cdots & \rho^{t_{n} -t_{n-1} } &  1  \\
+  \end{matrix}
+  \right)
++
+  \left(
+ \begin{matrix}
+     \sigma^2    & 0   &      0 &  0  & \cdots &  0  &  0 \\
+   0  &  \sigma^2 & 0 &  0  & \cdots & 0  &  0 \\
+      \vdots & \vdots & \vdots  &  \vdots   & \vdots & \vdots   & \vdots \\
+   0 & 0 & 0   &  \cdots   & \cdots   &  \sigma^2 & 0 \\
+   0 & 0 & 0   &     0    & \cdots & 0 &  \sigma^2  \\
+  \end{matrix}
+  \right).
+ $$
+
+Let $Y$ collect all the $y_i$s and $X$ be the corresponding design matrix. Using matrix notation, the -2log-likelihood can be written as
+$$
+    L =  (Y-X\beta)^{\rm T} \Sigma^{-1} (Y-X\beta) +\log(|\Sigma|),
+$$
+where $\Sigma = R_{CM}(\rho) + \sigma^2 I$. Note that the restricted maximum likelihood (REML), $L* = L+ \log |X^{\rm T} \Sigma^{-1}X|$, which can be used for covariance model selection for a fixed set of predictors $X$ (Fitzmaurice, Laird and Ware, 2011).  The explicit expression allows us to obtain $\Sigma^{-1}$ directly for parameter estimation and model selection.  The traditional time series model (without the nugget effects, i.e., $\sigma_\zeta^2=0$)  produces $L*$ value 308.1.  The Addition of $\eta_i$ changed (reduced) the REML $L*$ value by 146.02 ($\chi^2$ with 1 degree of freedom under the null hypothesis), indicating the nugget effects lead to a great improvement in the covariance modelling.
+
+
+\section{Discussion}
+
+We have provided exact inversions for a number of commonly used covariance matrices arising from time series models with additional independent errors. Closed forms are also obtained when the exchangeable, also known as compound symmetry, covariance is included.  The exchangeable correlation model is often used to take account of random subject effects in biomedical trials and other studies.  The arithmetic complexity is $O(n)$ for calculating the inverse matrix. Proposition 3 presents a continuous-time Markov model with irregular observation times and involves two recurrence equations with the arithmetic complexity of $O(n^2)$. These results are also applicable when observation times become irregular due to missing data. For example, if we consider the covariance $\Sigma = R_{AR}(\rho) +\sigma^2 I_n$ with missing observations,  the submatrix of $\Sigma$ is of interest. This submatrix can be formulated using the irregular observation times. The independent error component is allowed to have different variances at different times, which is useful when the variances are modelled as a function of the mean or other covariates, as is often the case in linear mixed-effect models and nonlinear mixed-effect models.
+
+The results are useful for saving computing time or cost, which is necessary, for example, when the dimension $n$ is large.  For example,  directly inverting a matrix with the dimensions of
+$2000\times 2000$ using a statistical package R, is a daunting task.  If this task needs to be carried out numerous times in an iterative procedure, even for a much smaller $n$, explicit expressions of the inverse matrices would become very desirable. Current work can be generalised to block tridiagonal matrices or other patterned matrices, which have great potential for large or massive data analyses (cf. Bonney and Kissling, 1984). Such extensions will be able to inverse covariances from multilevel modelling with a hierarchy structure and other time series models with nugget effects.   Another potential application of the results here is in the context of ridge regression, in which artificial ``nugget'' effects are added to the diagonal of the covariance matrix. \\
+
+
+\centerline{\sc Acknowledgments}
+
+\noindent
+The author would like to thank his colleagues, Anthony Pettitt,  Nan Ye and Shen Wang, for their interesting discussions and for providing me with some important references on this topic.  This research was partially supported by the Australian Research Council grant DP160104292.
+
+
+\bibliographystyle{unsrt}
+
+\bibliography{refs}
+
+\newpage
+
+\noindent
+{\bf Appendix:}  \  {\it Proof of Proposition  2}
+
+We first provide the following Lemma (see, for example, Seber and Wild, 1989, p. 678). Lemma. \ \ Suppose $A$ is a square and non-singular matrix, and $u$ and $v$ are  two vectors, then $A+uv^{\rm T}$ is also non-singular, and
+$$
+(A+uv^{\rm T})^{-1} = A^{-1} - \frac{(A^{-1}u)(v^{\rm T}A^{-1})}{1+v^{\rm T}A^{-1}u}.
+$$
+We first apply the method of tearing (Bonney \& Kissling, 1984) and write $\Sigma^{-1}$ as $\sigma^{-2} I -W^{-1}/\sigma^{4}$, where $W = R^{-1}_{AR}(\rho) + \sigma^{-2} I$, and $R^{-1}_{AR}(\rho)$ is readily available.
+
+We now work out an analytical expression for $W^{-1}$. Let $\xi^2= \sigma^2/(1-\rho^2)$, $a = -\rho/(1+\rho^2+\xi^2)$, $b^2=(1+\rho^2+\xi^2)/(1-\rho^2)$ and $\tau^2=\rho^2/(1+\rho^2+\xi^2)$.
+
+If $u=(1, 0,...,0)$ and $v=(0,...,0,1)$ are two vectors of dimension $n\times 1$, we can write $W$ as $b^2 \{P - \tau^2 vv^{\rm T})\}$, in which $P = R_{MA}(a) -\tau^2uu^{\rm T}$  and the Lemma can be applied as
+\begin{eqnarray*}
+W^{-1} & = & b^{-2}\{P - \tau^2 vv^{\rm T})\}^{-1}\\
+       & = & b^{-2}P^{-1}\left\{ I + \tau^2 \frac{vv^{\rm T} P^{-1}}
+        {1 - \tau^2 v^{\rm T} P^{-1}v}\right\}.
+\end{eqnarray*}
+By applying the Lemma in the appendix again to $P$,  we have
+$$
+P^{-1}  =  R^{-1}_{MA}(a) \left\{ I + \tau^2 \frac{uu^{\rm T} R^{-1}_{MA}(a)}
+        {1 - \tau^2 u^{\rm T} R^{-1}_{MA}(a)u}\right\}.
+$$
+
+Note that $uu^{\rm T} R^{-1}_{MA}(a)$ takes the first row of $R^{-1}_{MA}(a)$ and 0 elsewhere, and $u^{\rm T} R^{-1}_{MA}(a)u$ is a scalar taking the first element in $R^{-1}_{MA}(a)$.
+
+As $R^{-1}_{MA}(a)$ is available in a closed form, we have obtained $P^{-1}$; thus,
+$W^{-1}$ and $\Sigma^{-1}$ is $\sigma^{-2} I + W^{-1}\sigma^{-4}$ in closed forms.
+
+ \end{document}
+
+

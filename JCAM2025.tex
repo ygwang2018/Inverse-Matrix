@@ -1,0 +1,580 @@
+\documentclass[preprint,11pt,authoryear]{elsarticle}
+\usepackage{geometry}
+\usepackage{orcidlink}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{tabularx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{setspace}
+\usepackage{multirow}  
+\usepackage{threeparttable}
+\DeclareMathOperator{\Ex}{\mathbb{E}}
+\DeclareMathOperator{\Var}{\mathbb{V}}
+\usepackage{amsthm}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\def\blx@mksc@getmath#1\blx@mksc@other$#2${\blx@mksc@other{{$#2$}}}
+\DeclareMathOperator*{\diag}{diag}
+\let\Pr\relax
+\DeclareMathOperator{\Pr}{\mathbb{P}}
+\makeatother
+\newcommand{\del}{\bm{\nabla}}
+
+\def\cbl{\color{blue}}
+\def\cb{\color{black}}
+
+\journal{Journal of Computational and Applied Mathematics}
+
+\begin{document}
+\onehalfspacing 
+\begin{frontmatter}
+
+\title{Fast Inversion and Determinant Recursions for Irregular Markov Covariances with Nugget Effects} 
+
+\author[label1]{You-Gan Wang\orcidlink{0000-0003-0901-4671}}
+\ead{you-gan.wang@uq.edu.au}
+ \author[label2]{Jinran Wu\orcidlink{0000-0002-2388-3614}}
+ \ead{jinran.wu@uq.edu.au}
+ \author[label3]{Ting Cui\corref{cor1}\orcidlink{0000-0002-xxxx-xxxx}}
+ \ead{cuiting@gdufe.edu.cn}
+ \cortext[cor1]{Corresponding author}
+\affiliation[label1]{School of Statistics and Data Science, Guangdong University of Finance  and Economics, Guangdong, 510320, China}
+\affiliation[label2]{School of Mathematics and Physics, The University of Queensland, St Lucia 4072, Australia}
+\affiliation[label3]{School of Economics, Guangdong University of Finance  and Economics, Guangdong, 510320, China}
+
+
+
+
+\begin{abstract}
+We develop explicit inverse representations and efficient recursions for several classes
+of structured correlation and covariance matrices arising from dependence models and their
+diagonal perturbations (nugget effects). For the MA(1) correlation matrix, we derive
+closed-form expressions for all entries of the inverse for every nonsingular parameter
+value, including regimes where commonly used formulas do not apply. For continuous-time
+first-order Markov correlation matrices observed on irregular grids, we study the
+nugget-augmented form $\Sigma = R_{\mathrm{CM}}(\rho) + H$ with a general diagonal matrix
+$H$ and show that inversion reduces to solving a symmetric tridiagonal system, yielding
+stable $O(n^2)$ recursions for $\Sigma^{-1}$ and related quantities. We further show how
+exchangeable components and random-intercept effects can be incorporated via low-rank
+updates, leading to explicit Sherman--Morrison-type corrections once $S^{-1}\mathbf 1$ is
+available for the structured part $S$. These results provide practical primitives for
+large-scale computations involving quadratic forms and log-determinants in structured
+matrix settings. Two motivating examples are briefly discussed: locus-wise linear systems
+in summary-statistic GWAS and covariance modelling for irregularly sampled river sediment
+data with measurement error.
+\end{abstract}
+
+\begin{keyword}
+ Covariance modelling  \sep  Large dimension   \sep Longitudinal data
+  \sep Random effects  \sep  Repeated measures \sep  Time series
+ \end{keyword}
+\end{frontmatter}
+\newpage
+
+\section{Introduction}
+\label{sec:introduction}
+
+Fast and numerically stable linear-algebra primitives for structured matrices remain a
+central theme in applied linear algebra and scientific computing. In many statistical and
+data-analytic workflows, the dominant operations reduce to a small set of matrix tasks for a
+structured covariance (or correlation) matrix $\Sigma$: (i) solving $\Sigma x=b$ for many
+right-hand sides, (ii) evaluating quadratic forms $b^{\mathsf T}\Sigma^{-1}b$, and (iii)
+computing $\log|\Sigma|$ (and, in restricted likelihood settings, $\log|X^{\mathsf T}\Sigma^{-1}X|$).
+When $\Sigma$ is dense and unstructured, these operations are typically implemented via dense
+factorizations with $O(n^3)$ arithmetic and $O(n^2)$ storage, which becomes prohibitive when $n$
+is large or when these primitives must be evaluated repeatedly.
+
+Structured covariance matrices arise broadly across time series, longitudinal analysis, and
+kernel-based learning. Autoregressive and moving-average dependence is standard in time-series
+modelling \citep{box1976time, hamilton2020time, pourahmadi1999joint}, while mixed and random-effects
+models often combine temporal structure with exchangeable components \citep{laird1982random, verbeke2000linear}.
+In Gaussian process regression and kernel methods, covariance inversion and log-determinants are
+well-known computational bottlenecks \citep{rasmussen2006gaussian, wilson2015kernel, gardner2018gpytorch}.
+A practical complication, ubiquitous in applied work, is the presence of \emph{nugget effects}
+(independent measurement error or microscale variability), which add a diagonal component and can
+invalidate simple inverse formulas that hold in nugget-free idealizations.
+
+From the perspective of linear algebra, the matrices induced by these models are frequently
+tridiagonal, banded, or admit reductions to tridiagonal systems. Explicit inverse representations
+and continuant recursions for tridiagonal/banded matrices have a substantial literature
+\citep{yamamoto1979band, usmani1994tridiagonal, dafonseca2001explicit, mallik2001inverse, sutradhar2003inversion}.
+However, for covariance models used in statistics, two issues repeatedly arise:
+(i) parameter regimes where commonly quoted closed forms no longer apply (even when the matrix remains
+nonsingular), and (ii) the need to incorporate diagonal nugget terms and irregular grids without losing
+computational tractability.
+
+This paper develops explicit inverses and practical recursions for several covariance families that
+remain highly relevant in statistics and computing, but become computationally challenging once nugget
+effects and irregular sampling are introduced. We focus on three building blocks:
+(i) the MA(1) correlation matrix $R_{\mathrm{MA}}(\rho)$,
+(ii) an AR(1) correlation augmented by a nugget term, $\Sigma = R_{\mathrm{AR}}(\rho)+\sigma^2 I$, and
+(iii) a continuous-time first-order Markov (OU-type) correlation observed on an irregular grid with a
+general diagonal nugget, $\Sigma = R_{\mathrm{CM}}(\rho)+H$ \citep{nunez1994analysis, glasbey1995unequally}.
+
+\paragraph{Preview and motivation.}
+Although our contributions are matrix-analytic, the motivation is computational: the same primitives
+$\Sigma^{-1}b$ and $\log|\Sigma|$ appear repeatedly in likelihood/REML evaluation and in large-scale
+iterative procedures. Two representative settings are (a) locus-wise summary-statistic computations in
+GWAS conditional/joint analysis \citep{yang2012cojo}, where one repeatedly solves linear systems formed
+from structured approximations to LD, and (b) environmental time series with irregular sampling and
+measurement error \citep{cohn1992validity}, where likelihood/REML fitting requires repeated evaluation
+of quadratic forms and log-determinants for Markov+nugget covariances. These examples serve only as
+motivation; the main results are explicit inverses and recursions for the associated structured matrices.
+
+The remainder of the paper is organized as follows. Section~\ref{sec:covmodels} presents the structured
+covariance models and derives explicit inverse representations and recursions, with proofs provided in
+the main text. Section~\ref{sec:applications} gives brief motivating examples, and Section~\ref{sec:discussion}
+concludes with discussion and extensions.
+
+
+\section{Structured covariance models and explicit inverses}
+\label{sec:covmodels}
+
+\noindent
+This section collects explicit inverse representations for three patterned correlation
+families that serve as building blocks throughout the paper: the MA(1) correlation matrix,
+the AR(1) correlation matrix with a nugget effect, and the continuous-time Markov (OU-type)
+correlation matrix observed on an irregular grid with a general diagonal nugget.
+Our goal is to provide \emph{implementation-ready} formulas and recursions for $\Sigma^{-1}$
+(or $\Sigma^{-1}b$) together with associated primitives (quadratic forms and log-determinants)
+that are repeatedly required in likelihood and restricted-likelihood computations
+\citep{diggle2002analysis, fitzmaurice2012applied}.
+
+% =========================================================
+\subsection{MA(1) correlation matrices}
+\label{subsec:ma1}
+
+Let $R_{\mathrm{MA}}(\rho)$ be the $n\times n$ MA(1) correlation matrix with parameter
+$\rho\in\mathbb{R}$, that is,
+\[
+\bigl(R_{\mathrm{MA}}(\rho)\bigr)_{ij}
+=
+\begin{cases}
+1, & i=j,\\
+\rho, & |i-j|=1,\\
+0, & |i-j|>1.
+\end{cases}
+\]
+It is well known that
+\begin{equation}\label{eq:det_ma1}
+|R_{\mathrm{MA}}(\rho)|
+=
+\prod_{k=1}^{n}\Bigl\{1+2\rho\cos\!\Bigl(\frac{k\pi}{n+1}\Bigr)\Bigr\},
+\end{equation}
+so the eigenvalues are $1+2\rho\cos\{k\pi/(n+1)\}$, $k=1,\ldots,n$
+(see, e.g., classical treatments of tridiagonal Toeplitz spectra and continuants;
+compare \citealp{kendall1948advanced, shaman1969inverse, sutradhar2003inversion}).
+Hence $R_{\mathrm{MA}}(\rho)$ is singular if and only if
+$\rho = -\{2\cos(k\pi/(n+1))\}^{-1}$ for some $k\in\{1,\ldots,n\}$, and it is positive
+definite for $\rho\in\bigl(-\{2\cos(\pi/(n+1))\}^{-1},\{2\cos(\pi/(n+1))\}^{-1}\bigr)$.
+
+For $|\rho|<1/2$, classical explicit formulas are available
+\citep{whittle1954appendix, shaman1969inverse}.
+Our first result gives a real-valued closed form for all nonsingular $\rho$,
+including $|\rho|\ge 1/2$, complementing the general literature on explicit inverses of
+tridiagonal/banded matrices \citep{yamamoto1979band, usmani1994tridiagonal, dafonseca2001explicit, mallik2001inverse}.
+
+\begin{proposition}\label{prop:ma1inv}
+Suppose $R_{\mathrm{MA}}(\rho)$ is nonsingular. Then, for $1\le i\le j\le n$,
+the $(i,j)$ entry of $R_{\mathrm{MA}}(\rho)^{-1}$ is
+\begin{equation}\label{eq:ma1inv_trig}
+\bigl(R_{\mathrm{MA}}(\rho)^{-1}\bigr)_{ij}
+=
+\frac{-\sin\{(n-j+1)\theta\}\,\sin(i\theta)}
+{\rho\,\sin(\theta)\,\sin\{(n+1)\theta\}},
+\end{equation}
+where $\theta$ satisfies $\cos(\theta)=-1/(2\rho)$ (with $\theta\in(0,\pi)$ chosen consistently).
+In the boundary cases $\rho=\pm 1/2$, the limiting values of \eqref{eq:ma1inv_trig} are
+\begin{equation}\label{eq:ma1inv_half}
+\bigl(R_{\mathrm{MA}}(\tfrac12)^{-1}\bigr)_{ij}
+=
+(-1)^{i-j}\frac{(n-j+1)i}{(\tfrac12)(n+1)},
+\qquad
+\bigl(R_{\mathrm{MA}}(-\tfrac12)^{-1}\bigr)_{ij}
+=
+-\frac{(n-j+1)i}{(-\tfrac12)(n+1)}.
+\end{equation}
+Moreover, when $|\rho|<1/2$, \eqref{eq:ma1inv_trig} coincides with the standard hyperbolic
+representation obtained via the substitution
+$b=-(\sqrt{1-4\rho^2}+1)/(2\rho)$ (equivalently $\rho=-b/(1+b^2)$)
+\citep{whittle1954appendix, shaman1969inverse}.
+\end{proposition}
+
+\noindent
+\emph{Comment.}
+Expression \eqref{eq:ma1inv_trig} is numerically stable and easy to evaluate for all
+nonsingular $\rho$.
+A direct verification follows by multiplying the candidate inverse by $R_{\mathrm{MA}}(\rho)$,
+using tridiagonal identities (cf.\ \citealp{usmani1994tridiagonal, mallik2001inverse});
+details are provided below in the proof.
+The MA(1) inverse will also serve as a building block for subsequent constructions.
+
+\paragraph{Proof of Proposition~\ref{prop:ma1inv}.}
+% (Insert here your Appendix proof; keep as-is, but now it is in the main text.)
+% Ensure any external citations in the proof use keys from refs(8).bib, e.g.
+% \citep{whittle1954appendix, shaman1969inverse, sutradhar2003inversion}.
+% [PASTE YOUR EXISTING PROOF HERE]
+\hfill$\square$
+
+% =========================================================
+\subsection{AR(1) correlation with a nugget effect}
+\label{subsec:ar1_nugget}
+
+Let $R_{\mathrm{AR}}(\rho)$ be the $n\times n$ AR(1) correlation matrix with
+$\bigl(R_{\mathrm{AR}}(\rho)\bigr)_{ij}=\rho^{|i-j|}$, $|\rho|<1$.
+Its inverse is the well-known tridiagonal precision matrix
+\begin{equation}\label{eq:ar1_precision}
+R_{\mathrm{AR}}(\rho)^{-1}
+=
+\frac{1}{1-\rho^2}
+\begin{pmatrix}
+1 & -\rho &        &        &  \\
+-\rho & 1+\rho^2 & -\rho &  &  \\
+      & \ddots & \ddots & \ddots & \\
+      &        & -\rho & 1+\rho^2 & -\rho \\
+      &        &       & -\rho & 1
+\end{pmatrix},
+\end{equation}
+see, for example, standard time-series references \citep{box1976time, hamilton2020time}.
+Consider the nugget-augmented covariance
+\[
+\Sigma = R_{\mathrm{AR}}(\rho) + \sigma^2 I,\qquad \sigma^2>0.
+\]
+Write $e_1=(1,0,\ldots,0)^{\mathsf T}$ and $e_n=(0,\ldots,0,1)^{\mathsf T}$.
+
+\begin{proposition}\label{prop:ar1_nugget_inv}
+Let $\Sigma=R_{\mathrm{AR}}(\rho)+\sigma^2 I$ with $\sigma^2>0$ and $|\rho|<1$, and define
+\[
+\xi^2=\frac{1-\rho^2}{\sigma^2},\qquad
+a=-\frac{\rho}{1+\rho^2+\xi^2},\qquad
+b^2=\frac{1+\rho^2+\xi^2}{1-\rho^2}.
+\]
+Then
+\begin{equation}\label{eq:ar1_nugget_inv}
+\Sigma^{-1}
+=
+\sigma^{-2}\Bigl(I-\sigma^{-2}\bar W\Bigr),
+\qquad
+\bar W
+=
+b^{-2}\bar P
+\left\{
+I+\frac{a^2\, e_n e_n^{\mathsf T}\bar P}{1-a^2\,e_n^{\mathsf T}\bar P e_n}
+\right\},
+\end{equation}
+where
+\begin{equation}\label{eq:ar1_nugget_P}
+\bar P
+=
+R_{\mathrm{MA}}(a)^{-1}
+\left\{
+I+\frac{a^2\, e_1 e_1^{\mathsf T}R_{\mathrm{MA}}(a)^{-1}}{1-a^2\,e_1^{\mathsf T}R_{\mathrm{MA}}(a)^{-1}e_1}
+\right\}.
+\end{equation}
+Since $R_{\mathrm{MA}}(a)^{-1}$ is available entrywise from Proposition~\ref{prop:ma1inv},
+\eqref{eq:ar1_nugget_inv}--\eqref{eq:ar1_nugget_P} provide an explicit representation of
+$\Sigma^{-1}$.
+\end{proposition}
+
+\paragraph{Proof of Proposition~\ref{prop:ar1_nugget_inv}.}
+% (Insert here your Appendix proof; keep as-is, but now it is in the main text.)
+% [PASTE YOUR EXISTING PROOF HERE]
+\hfill$\square$
+
+\medskip
+\noindent
+\textbf{Exchangeable/random-intercept extension.}
+Compound-symmetry terms and random-intercept effects correspond to rank-one perturbations.
+In particular, for any nonsingular matrix $S$ and scalar $\gamma$,
+\begin{equation}\label{eq:rank1_update}
+(S+\gamma\,\mathbf 1\mathbf 1^{\mathsf T})^{-1}
+=
+S^{-1}
+-
+\frac{\gamma\,S^{-1}\mathbf 1\mathbf 1^{\mathsf T}S^{-1}}{1+\gamma\,\mathbf 1^{\mathsf T}S^{-1}\mathbf 1},
+\end{equation}
+whenever $1+\gamma\,\mathbf 1^{\mathsf T}S^{-1}\mathbf 1\neq 0$.
+Taking $S=R_{\mathrm{AR}}(\rho)+\sigma^2 I$ and using Proposition~\ref{prop:ar1_nugget_inv}
+yields explicit inverses for AR(1)+nugget+exchangeable constructions commonly used in
+random-effects modelling \citep{laird1982random, verbeke2000linear}.
+
+% =========================================================
+\subsection{Continuous-time Markov correlation on an irregular grid with diagonal nugget}
+\label{subsec:markov_irregular}
+
+Let $t_1<t_2<\cdots<t_n$ denote an irregular grid (sampling times, locations, or ordered
+positions). Consider the continuous-time Markov/OU-type correlation model
+\[
+\bigl(R_{\mathrm{CM}}(\rho)\bigr)_{ij}=\rho^{|t_j^\delta-t_i^\delta|},\qquad 0<\rho<1,
+\]
+where $\delta>0$ is an optional power transform to accommodate nonstationarity
+\citep{nunez1994analysis, glasbey1995unequally}. Define $d_k=t_k^\delta-t_{k-1}^\delta$ for
+$k=2,\ldots,n$.
+
+We study the nugget-augmented matrix
+\[
+\Sigma = R_{\mathrm{CM}}(\rho)+H,\qquad H=\mathrm{diag}(h_1,\ldots,h_n),
+\]
+with $h_i>0$ (heterogeneous nugget/measurement-error variances).
+A key fact is that $R_{\mathrm{CM}}(\rho)^{-1}$ is tridiagonal; an explicit form is
+available in \citet{nunez1994analysis} (see also related Markov/irregular-time developments in
+\citealp{glasbey1995unequally, wang2004unbiased}):
+\begin{equation}\label{eq:rcm_precision}
+R_{\mathrm{CM}}(\rho)^{-1}
+=
+\begin{pmatrix}
+\frac{1}{1-\rho^{2d_2}} & \frac{-\rho^{d_2}}{1-\rho^{2d_2}} & & & \\
+\frac{-\rho^{d_2}}{1-\rho^{2d_2}}
+& \frac{1}{1-\rho^{2d_2}}+\frac{1}{1-\rho^{2d_3}}-1 & \frac{-\rho^{d_3}}{1-\rho^{2d_3}} & & \\
+& \ddots & \ddots & \ddots & \\
+& & \frac{-\rho^{d_{n-1}}}{1-\rho^{2d_{n-1}}}
+& \frac{1}{1-\rho^{2d_{n-1}}}+\frac{1}{1-\rho^{2d_n}}-1
+& \frac{-\rho^{d_n}}{1-\rho^{2d_n}}\\
+& & & \frac{-\rho^{d_n}}{1-\rho^{2d_n}} & \frac{1}{1-\rho^{2d_n}}
+\end{pmatrix}.
+\end{equation}
+
+\begin{proposition}\label{prop:cm_nugget_tearing}
+Let $\Sigma=R_{\mathrm{CM}}(\rho)+H$ with $h_i>0$ and define $\Delta=H^{-1}$ and
+\begin{equation}\label{eq:F_def}
+F = R_{\mathrm{CM}}(\rho)^{-1}+\Delta.
+\end{equation}
+Then
+\begin{equation}\label{eq:tearing_identity}
+\Sigma^{-1}
+=
+\Delta-\Delta F^{-1}\Delta.
+\end{equation}
+Moreover, $F$ is symmetric tridiagonal. Hence:
+\begin{itemize}
+\item for any vector $b$, $\Sigma^{-1}b$ can be computed in $O(n)$ time by a single
+tridiagonal solve $x=F^{-1}(\Delta b)$ followed by \eqref{eq:tearing_identity};
+\item if the full matrix $\Sigma^{-1}$ is required, it can be constructed in $O(n^2)$ time
+by inverting the tridiagonal $F$ using continuant recursions
+\citep{yamamoto1979band, usmani1994tridiagonal, dafonseca2001explicit, mallik2001inverse}.
+\end{itemize}
+\end{proposition}
+
+\paragraph{Proof of Proposition~\ref{prop:cm_nugget_tearing}.}
+% (Insert here your Appendix proof; keep as-is, but now it is in the main text.)
+% [PASTE YOUR EXISTING PROOF HERE]
+\hfill$\square$
+
+\noindent
+\emph{Comment (recursions for $F^{-1}$).}
+Write the tridiagonal entries of $F$ as
+\[
+F =
+\begin{pmatrix}
+a_1 & b_2 \\ b_2 & a_2 & b_3 \\ & \ddots & \ddots & \ddots \\
+& & b_n & a_n
+\end{pmatrix},
+\]
+where $b_k=-\rho^{d_k}/(1-\rho^{2d_k})$ for $k=2,\ldots,n$, and $a_i$ equals the
+corresponding diagonal entry of \eqref{eq:rcm_precision} plus $1/h_i$.
+Diagonal and off-diagonal elements of $F^{-1}$ can be obtained via standard forward/backward
+continuant recursions \citep{usmani1994tridiagonal, dafonseca2001explicit, mallik2001inverse};
+see the algorithmic description in the next section.
+In most statistical applications, only $\Sigma^{-1}b$ and $\log|\Sigma|$ are required, and
+both can be computed in $O(n)$ time via tridiagonal solvers and determinant recursions
+\citep{yamamoto1979band, sutradhar2003inversion}.
+
+\section{Motivating Examples}
+\label{sec:examples}
+
+\noindent
+We briefly indicate how the explicit inverses and recursions in Sections~2--3 can be used
+as computational primitives in problems whose dominant costs are repeated (i) linear solves
+$\Sigma x=b$, (ii) quadratic forms $b^{\mathsf T}\Sigma^{-1}b$, and (iii) log-determinants
+$\log|\Sigma|$ (and, under REML, $\log|X^{\mathsf T}\Sigma^{-1}X|$).  The goal here is not to
+replace full model-based analyses, but to highlight where structured covariance operations
+make otherwise heavy likelihood/REML calculations feasible at scale.
+
+% =========================================================
+\subsection{Example 1: Locus-wise linear systems in summary-statistic GWAS}
+\label{subsec:ex_gwas}
+
+\noindent
+\paragraph{Background (COJO-style computations).}
+Approximate \emph{conditional and joint} analysis of GWAS summary statistics (COJO)
+\citep{yang2012cojo} uses marginal SNP-wise association estimates together with an LD
+correlation matrix $R$ estimated from a reference cohort.  At the level of a locus with
+$m$ SNPs, such procedures repeatedly solve linear systems whose canonical form is
+\begin{equation}\label{eq:gwas_basic}
+  R\, b \approx \hat\beta,
+\end{equation}
+where $\hat\beta$ stacks marginal (single-SNP) effect estimates and $b$ denotes a vector of
+working joint effects; conditional tests and stepwise updates lead to multiple solves with
+different right-hand sides \citep{yang2012cojo}.  In dense LD regions, $R$ may be
+ill-conditioned, making stable inversion/solves a bottleneck.
+
+\smallskip
+\noindent
+\paragraph{Structured LD surrogate and ridge/nugget stabilisation.}
+Ordering SNPs by genomic (or genetic map) position $t_1<\cdots<t_m$, a parsimonious
+distance-decay surrogate that matches the setting of Section~3 is a Markov/OU-type
+correlation on an irregular grid,
+\begin{equation}\label{eq:gwas_markov}
+  \tilde r_{jk}(\rho,\delta)=\rho^{\,|t_j^\delta-t_k^\delta|},
+\end{equation}
+together with a diagonal nugget (ridge) term
+\begin{equation}\label{eq:gwas_nugget}
+  \tilde\Sigma=\tilde R(\rho,\delta)+H,\qquad
+  H=\mathrm{diag}(\sigma_1^2,\ldots,\sigma_m^2).
+\end{equation}
+Then $\tilde\Sigma b=\hat\beta$ is exactly a ``Markov + (possibly heterogeneous) nugget''
+system, for which Section~3 provides a diagonal--tridiagonal reduction and stable
+recursions to compute $\tilde\Sigma^{-1}b$ (and, if needed, $\log|\tilde\Sigma|$) without
+dense $O(m^3)$ factorisations.  In practice, $\tilde\Sigma$ can be used as (i) a structured
+surrogate within locus-wise screening/conditioning or (ii) a preconditioner when solving
+the full system with $R$.
+
+\smallskip
+\noindent
+\paragraph{Concrete demonstration plan (DIAGRAM type 2 diabetes).}
+As a real-data target, the DIAGRAM type~2 diabetes meta-analysis of \citet{morris2012t2d}
+provides suitable summary statistics.  A minimal, reproducible demonstration proceeds as:
+
+\begin{enumerate}
+\item \textbf{Download summary statistics.}
+Obtain the DIAGRAM release corresponding to \citet{morris2012t2d} from the consortium
+download portal (typically requiring agreement to data-use terms).\footnote{DIAGRAM/DIAMANTE/T2DGGI downloads:
+\texttt{https://diagram-consortium.org/downloads.html}.}
+
+\item \textbf{Choose a locus and harmonise variants.}
+Select a genomic window (e.g., $\pm 500$kb around a lead SNP), align effect alleles across
+summary statistics and LD reference, remove ambiguous/strand-issue SNPs, and match SNP IDs.
+
+\item \textbf{Build an empirical LD matrix $R$.}
+Using a reference cohort (e.g., 1000 Genomes EUR or another appropriate panel), compute
+$R=(r_{jk})$ for the matched SNPs (PLINK is standard for this step).
+
+\item \textbf{Fit the structured surrogate $\tilde R(\rho,\delta)$.}
+Treat positions $(t_j)$ as an irregular grid.  Estimate $(\rho,\delta)$ by matching
+empirical correlations to $\rho^{|t_j^\delta-t_k^\delta|}$ over a set of lags (e.g.,
+least squares on $\log|r_{j,j+\ell}|$ versus $t_{j+\ell}^\delta-t_j^\delta$), or by a simple
+profile search over $\delta$ with a closed-form $\rho$ update.
+
+\item \textbf{Stabilise with $H$ and solve.}
+Choose $H$ as a ridge/nugget (homoskedastic $H=\lambda I$ or heteroskedastic
+$H=\mathrm{diag}(\lambda_j)$).  Solve $\tilde\Sigma b=\hat\beta$ using the Section~3
+recursions (diagonal--tridiagonal reduction), and compare (timing/stability) with dense
+Cholesky on $R$ or with standard COJO implementations \citep{yang2012cojo}.
+
+\item \textbf{Report outputs.}
+At minimum: wall-clock scaling versus $m$, numerical stability diagnostics (condition
+numbers / failures), and sensitivity of $b$ to $(\delta,\lambda)$ for representative loci.
+\end{enumerate}
+
+\noindent
+This demonstration isolates the linear-algebraic contribution: repeated structured solves
+(and optionally log-determinants for tuning) on irregular grids with diagonal perturbations.
+
+% =========================================================
+\subsection{Example 2: Environmental monitoring with irregular sampling and nugget effects}
+\label{subsec:ex_sediment}
+
+\noindent
+Irregularly sampled environmental and longitudinal series routinely exhibit (i) temporal
+dependence and (ii) additional measurement noise.  A standard model is
+\begin{equation}\label{eq:sed_model}
+  y_i = X_i^{\mathsf T}\beta + \epsilon_i + \zeta_i,
+\end{equation}
+where $\epsilon_i$ is a correlated residual process and $\zeta_i$ is an independent nugget
+(measurement-error) term \citep{verbeke2000linear}.  Following \citet{cohn1992validity}, one
+may use covariates such as flow and seasonal terms to predict sediment concentration on a
+regular grid for load estimation.
+
+\smallskip
+\noindent
+With irregular sampling times $t_1<\cdots<t_n$, a continuous-time first-order Markov
+correlation (OU-type) yields
+\[
+\Sigma = \sigma_1^2 R_{\mathrm{CM}}(\rho) + \sigma^2 I,
+\qquad
+\bigl(R_{\mathrm{CM}}(\rho)\bigr)_{ij}=\rho^{|t_j-t_i|},
+\]
+where $\sigma^2$ is the nugget variance.  Likelihood and REML computations require repeated
+evaluation of $\Sigma^{-1}(Y-X\beta)$ and $\log|\Sigma|$ (and, under REML,
+$\log|X^{\mathsf T}\Sigma^{-1}X|$; see, e.g., \citealp{fitzmaurice2012applied}).  The
+Section~3 reduction expresses inversion of $R_{\mathrm{CM}}(\rho)+H$ (with $H$ diagonal) via a
+symmetric tridiagonal system, providing a numerically stable route to ML/REML estimation
+and covariance selection even when $n$ is large and the grid is irregular.
+
+\smallskip
+\noindent
+In the Burdekin River illustration (1994--2008; $n=590$), introducing a nugget component
+substantially improves REML fit relative to the pure Markov model, consistent with
+non-negligible measurement error in concentration sampling.
+
+
+
+
+
+\section{Discussion}
+\label{sec:discussion}
+
+This paper develops explicit inverse representations and efficient recursions for several
+classes of structured correlation and covariance matrices, with particular emphasis on
+diagonal perturbations (nugget effects) and irregular-grid Markov dependence. From a matrix
+analysis perspective, the results provide closed-form, entrywise expressions for the MA(1)
+inverse across the full nonsingular parameter range, together with a diagonal--tridiagonal
+reduction for nugget-augmented continuous-time Markov correlation matrices that yields
+stable and implementation-ready algorithms for $\Sigma^{-1}b$ and, when needed, for
+constructing $\Sigma^{-1}$ itself. These primitives address the core linear-algebraic
+bottlenecks that arise repeatedly in large-scale computations involving structured matrices.
+
+Several remarks and extensions are worth highlighting. First, although our development is
+motivated by covariance structures, the results are more broadly applicable to patterned
+matrices formed by diagonal perturbations of Markov-type correlation matrices. In many
+applications, the primary requirement is fast evaluation of linear solves and quadratic
+forms rather than explicit formation of the full inverse. For the Markov+nugget class, the
+tearing identity reduces these tasks to a single symmetric tridiagonal system, enabling
+$O(n)$ solves and stable computation even for large $n$.
+
+Second, low-rank modifications arise naturally in mixed-effects modelling and in exchangeable
+correlation structures. The Sherman--Morrison-type update formula provides an immediate
+route to incorporate random-intercept or compound-symmetry components once the structured
+base inverse (or $S^{-1}\mathbf 1$) is available. In this sense, the proposed Markov and MA(1)
+primitives can be viewed as modular building blocks within richer covariance constructions
+formed by combining diagonal and low-rank perturbations.
+
+Third, while the paper focuses on exact identities and recursions, numerical performance
+depends on parameter regimes. Near singularities of the underlying correlation matrix, or
+when $\rho$ is close to the boundary of admissibility, ill-conditioning is unavoidable and
+no method can eliminate sensitivity entirely. In such settings, the nugget term plays a
+dual role: it reflects genuine measurement error in many applications and also acts as a
+regularising perturbation that stabilises inversion and improves numerical robustness. A
+careful analysis of conditioning and floating-point stability for extreme parameter values
+is an important companion topic.
+
+Finally, the motivating examples illustrate how these matrix results can be embedded in
+statistical computations, but they are not intended to be exhaustive case studies. In
+summary-statistic GWAS, Markov/OU approximations with a nugget can serve as computationally
+efficient surrogates or preconditioners for locus-wise LD inversion. In irregular
+environmental time series, the Markov+nugget structure directly matches modelling needs and
+enables scalable likelihood-type computations. A systematic empirical investigation across
+application domains---including timing, stability, and the impact of structured
+approximations on downstream inference---remains a promising direction for future work.
+
+In summary, by providing explicit inverses, diagonal--tridiagonal reductions, and fast
+recursions for Markov-type matrices with nugget effects (and their low-rank extensions),
+this work contributes practical tools for structured matrix computations at scales where
+generic dense methods are prohibitively expensive.
+
+\centerline{\sc Acknowledgments}
+
+\noindent
+The author would like to thank his colleague Nan Ye, for interesting discussions and for providing me with some important references on this topic. 
+
+\bibliographystyle{unsrt}
+
+\bibliography{refs}
+
+
+ \end{document}
+
+
